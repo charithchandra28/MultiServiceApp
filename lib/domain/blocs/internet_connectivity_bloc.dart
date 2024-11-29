@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:ex1/blocs/connectivity_handler.dart';
+
+import '../../core/connectivity_handler.dart';
 
 
 
@@ -23,7 +24,7 @@ class InternetConnectivityBloc   {
     this.maxRetries = 3,
     this.retryBaseDelay = const Duration(seconds: 2),
   }) {
-    _connectivitySubscription = connectivityHandler.connectivityStream.listen(_handleConnectivityChange);
+    _connectivitySubscription = connectivityHandler.connectivityStream.listen(_handleConnectivityChange, onError: (error) => _internetAvailabilityController.add(false),);
   }
 
   /// Stream indicating whether the internet is available.
@@ -34,20 +35,28 @@ class InternetConnectivityBloc   {
     if ( result.isEmpty || result[0] == ConnectivityResult.none) {
       _internetAvailabilityController.add(false);
     } else {
-      final hasInternet = await _checkInternetConnection();
+      final hasInternet = await _checkInternetConnectionWithRetries();
       _internetAvailabilityController.add(hasInternet);
     }
   }
 
-  /// Verifies internet connectivity using a DNS lookup.
-  Future<bool> _checkInternetConnection() async {
-    try {
-      final result = await InternetAddress.lookup(apiDomain);
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } catch (_) {
-      return false;
+
+
+  Future<bool> _checkInternetConnectionWithRetries() async {
+    for (int attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        final result = await InternetAddress.lookup(apiDomain);
+        return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+      } catch (_) {
+        if (attempt == maxRetries - 1) return false;
+        await Future.delayed(retryBaseDelay * (attempt + 1));
+      }
     }
+    return false;
   }
+
+
+
 
   /// Retry logic for transient failures.
   Future<T> retryWithBackoff<T>(Future<T> Function() action) async {

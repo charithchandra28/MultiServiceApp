@@ -1,5 +1,5 @@
 // data/repositories/image_repository.dart
-import "../../core/config/supabase_client.dart";
+import "supabase_client.dart";
 
 class ImageRepository {
   final String bucketName;

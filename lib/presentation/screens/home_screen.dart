@@ -2,11 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../blocs/service_cubit.dart';
-import '../blocs/service_state.dart';
-import '../di.dart';
-import '../features/booking_screens/screens.dart';
+import '../../core/di.dart';
+import '../../domain/blocs/service_cubit.dart';
+import '../../domain/state/service_state.dart';
 import '../widgets/service_card.dart';
+import 'screens.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,17 +17,20 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
 
-  final serviceCubit = getIt<ServiceCubit>();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   Timer? _debounce;
 
 
 
+
+
+
+
   void onSearchChanged(String query) {
     if (_debounce?.isActive ?? false) _debounce!.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
-      serviceCubit.searchServices(query);
+      BlocProvider.of<ServiceCubit>(context).searchServices(query);
     });
   }
 
@@ -36,57 +39,72 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<ServiceCubit, ServiceState>(
-        bloc: serviceCubit,
         builder: (context, state) {
           return Scaffold(
-            appBar: AppBar(
-              title: state.isSearchMode ? TextField(
-                controller: _searchController,
-                focusNode: _focusNode,
-                decoration: InputDecoration(
-                  hintText: 'Search services...',
-                  border: InputBorder.none,
-                  hintStyle: const TextStyle(color: Colors.white70),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                    icon: const Icon(Icons.clear, color: Colors.white70),
-                    onPressed: () {
-                      _searchController.clear();
-                      serviceCubit.searchServices('');
-                    },
-                  )
-                      : null,
-                ),
-                style: const TextStyle(color: Colors.white),
-                onChanged: onSearchChanged,
-              ) : const Text(
-                'Multi-Service App',
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-              ),
-              backgroundColor: Colors.teal,
-              elevation: 8.0,
-              actions: [IconButton(
-                icon: Icon(state.isSearchMode ? Icons.cancel : Icons.search),
-                tooltip: state.isSearchMode ? 'Close search' : 'Open search',
-                onPressed: () {
-                  if (state.isSearchMode) {
-                    serviceCubit.toggleSearchMode();
-                    _searchController.clear();
-                    serviceCubit.searchServices('');
-                    _focusNode.unfocus();
-                  } else {
-                    serviceCubit.toggleSearchMode();
-                    Future.delayed(const Duration(milliseconds: 100), () {
-                      _focusNode.requestFocus();
-                    });
-                  }
-                },
-              )
-              ],
-            ),
+            appBar: _buildAppBar(state),
             body: _buildBody(state),
           );
         }
+    );
+  }
+
+
+
+
+
+  PreferredSizeWidget _buildAppBar(ServiceState state) {
+    return AppBar(
+      title: state.isSearchMode ? _buildSearchBar(): const Text(
+        'Multi-Service App',
+        style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+      ),
+      backgroundColor: Colors.teal,
+      elevation: 8.0,
+      actions: [ _buildSearchToggle(state)],
+    );
+  }
+
+
+  Widget _buildSearchBar() {
+    return TextField(
+      controller: _searchController,
+      focusNode: _focusNode,
+      decoration: InputDecoration(
+        hintText: 'Search services...',
+        border: InputBorder.none,
+        hintStyle: const TextStyle(color: Colors.white70),
+        suffixIcon: _searchController.text.isNotEmpty
+            ? IconButton(
+          icon: const Icon(Icons.clear, color: Colors.white70),
+          onPressed: () {
+            _searchController.clear();
+            BlocProvider.of<ServiceCubit>(context).searchServices('');
+          },
+        )
+            : null,
+      ),
+      style: const TextStyle(color: Colors.white),
+      onChanged: onSearchChanged,
+    );
+  }
+
+
+
+  IconButton _buildSearchToggle(ServiceState state) {
+    return IconButton(
+      icon: Icon(state.isSearchMode ? Icons.cancel : Icons.search),
+      tooltip: state.isSearchMode ? 'Close search' : 'Open search',
+      onPressed: () {
+        BlocProvider.of<ServiceCubit>(context).toggleSearchMode();
+        if (state.isSearchMode) {
+          _searchController.clear();
+          BlocProvider.of<ServiceCubit>(context).searchServices('');
+          _focusNode.unfocus();
+        } else {
+            _focusNode.requestFocus();
+
+        }
+      },
     );
   }
 

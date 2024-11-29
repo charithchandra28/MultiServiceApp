@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'exceptions.dart';
+import '../core/exceptions.dart';
 
 class CacheManager {
   final SharedPreferences prefs;

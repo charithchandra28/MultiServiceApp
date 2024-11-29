@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'package:ex1/blocs/service_state.dart';
+import 'package:ex1/data/models/service_model.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import '../../core/exceptions.dart';
+import '../../data/cache_manager.dart';
 import '../../data/repositories/image_repository.dart';
-import '../utils/cache_manager.dart';
-import '../utils/exceptions.dart';
+import '../state/service_state.dart';
 import 'internet_connectivity_bloc.dart';
 
 
@@ -18,8 +19,6 @@ class ServiceCubit extends Cubit<ServiceState> {
   final ImageRepository imageRepository;
   final InternetConnectivityBloc connectivityBloc;
   final CacheManager cacheManager;
-
-
   Timer? _debounceTimer;
   bool _isFetching = false;
 
@@ -41,6 +40,9 @@ class ServiceCubit extends Cubit<ServiceState> {
       }
     });
   }
+
+
+
 
 
   /// Fetches data with retries using exponential backoff.
@@ -99,17 +101,21 @@ class ServiceCubit extends Cubit<ServiceState> {
     try {
 
       // Define the list of services
-      final services = [
-        {'name': 'Grocery Booking', 'imageKey': 'grocery.jpg'},
-        {'name': 'Hair Salon Booking', 'imageKey': 'salon.jpg'},
-        {'name': 'Room Rent Booking', 'imageKey': 'room_rent.jpg'},
-        {'name': 'Land Availability', 'imageKey': 'land.jpg'},
-        {'name': 'Cab Booking', 'imageKey': 'cab.jpg'},
-        {'name': 'Restaurant Booking', 'imageKey': 'restaurant.jpg'},
-        {'name': 'Chicken Booking', 'imageKey': 'chicken_mutton.jpg'},
-        {'name': 'Tent Booking', 'imageKey': 'restaurant.jpg'},
-        {'name': 'Cloud Booking', 'imageKey': 'cab.jpg'},
+      final serviceMaps = [
+        ServiceModel(id:'1',name: 'Grocery Booking', imageKey: 'grocery.jpg'),
+        ServiceModel(id:'2',name: 'Hair Salon Booking', imageKey: 'salon.jpg'),
+        ServiceModel(id:'3',name: 'Room Rent Booking', imageKey: 'room_rent.jpg'),
+        ServiceModel(id:'4',name: 'Land Availability', imageKey: 'land.jpg'),
+        ServiceModel(id:'5',name: 'Cab Booking', imageKey: 'cab.jpg'),
+        ServiceModel(id:'6',name: 'Restaurant Booking', imageKey: 'restaurant.jpg'),
+        ServiceModel(id:'7',name: 'Chicken Booking', imageKey: 'chicken_mutton.jpg'),
+        ServiceModel(id:'8',name: 'Tent Booking', imageKey: 'restaurant.jpg'),
+        ServiceModel(id:'9',name: 'Cloud Booking', imageKey: 'restaurant.jpg'),
+
       ];
+
+      // Convert to List<Map<String, dynamic>>
+      List<Map<String, dynamic>> services = ServiceModel.toMapList(serviceMaps);
 
 
       // Fetch all images in parallel
@@ -166,15 +172,21 @@ class ServiceCubit extends Cubit<ServiceState> {
 
 
   void searchServices(String query) async{
-    if (query.isEmpty) {
-      // Reset to show all services if the query is empty
-      emit(state.copyWith(filteredServices: state.services));
-    } else {
-      // Filter services based on the search query
-      final filtered = await compute(_filterServices, {'services': state.services, 'query': query});
-      emit(state.copyWith(filteredServices: filtered)); // Update filtered services.
 
-    }
+    _debounce(() async {
+
+      if (query.isEmpty) {
+        // Reset to show all services if the query is empty
+        emit(state.copyWith(filteredServices: state.services));
+      } else {
+        // Filter services based on the search query
+        final filtered = await compute(_filterServices, {'services': state.services, 'query': query});
+        emit(state.copyWith(filteredServices: filtered)); // Update filtered services.
+
+      }
+
+    });
+
   }
 
   static List<Map<String, dynamic>> _filterServices(Map<String, dynamic> params) {
@@ -184,6 +196,12 @@ class ServiceCubit extends Cubit<ServiceState> {
         .where((service) =>
         service['name'].toLowerCase().contains(query.toLowerCase()))
         .toList();
+  }
+
+
+  void _debounce(Function callback, {Duration duration = const Duration(milliseconds: 300)}) {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(duration, () => callback());
   }
 
   void toggleSearchMode() {

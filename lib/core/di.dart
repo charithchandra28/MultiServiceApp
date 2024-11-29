@@ -1,11 +1,12 @@
 import 'package:get_it/get_it.dart';
-import '../data/repositories/image_repository.dart';
-import '../blocs/connectivity_handler.dart';
-import '../blocs/internet_connectivity_bloc.dart';
-import '../blocs/service_cubit.dart';
+import '../../data/repositories/image_repository.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'utils/cache_manager.dart';
+import '../data/cache_manager.dart';
+import 'connectivity_handler.dart';
+import '../domain/blocs/internet_connectivity_bloc.dart';
+import '../domain/blocs/service_cubit.dart';
 
 
 final getIt = GetIt.instance;

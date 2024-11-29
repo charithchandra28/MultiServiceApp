@@ -8,9 +8,8 @@ class ConnectivityHandler {
   StreamController<List<ConnectivityResult>>.broadcast();
 
   ConnectivityHandler() {
-    _connectivity.onConnectivityChanged.listen((result) {
-      _controller.add(result);
-    });
+    _connectivity.onConnectivityChanged.listen( (result) => _controller.add(result),
+        onError: (error) => _controller.addError(error),);
   }
 
   /// A stream of connectivity results (WiFi, mobile, none).
@@ -20,6 +19,8 @@ class ConnectivityHandler {
 
   /// Dispose the handler to avoid memory leaks.
   void dispose() {
-    _controller.close();
+    if (!_controller.isClosed) {
+      _controller.close();
+    }
   }
 }

@@ -1,12 +1,10 @@
-import 'blocs/connectivity_handler.dart';
-import 'blocs/internet_connectivity_bloc.dart';
-import 'core/config/supabase_client.dart';
+import 'data/repositories/supabase_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'blocs/service_cubit.dart';
 import 'data/repositories/image_repository.dart';
-import 'di.dart';
-import 'screens/home_screen.dart';
+import 'core/di.dart';
+import 'domain/blocs/service_cubit.dart';
+import 'presentation/screens/home_screen.dart';
 
 
 void main() async {
