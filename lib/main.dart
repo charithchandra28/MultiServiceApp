@@ -1,7 +1,6 @@
 import 'data/repositories/supabase_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'data/repositories/image_repository.dart';
 import 'core/di.dart';
 import 'domain/blocs/service_cubit.dart';
 import 'presentation/screens/home_screen.dart';

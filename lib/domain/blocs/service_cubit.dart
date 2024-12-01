@@ -1,40 +1,53 @@
 import 'dart:async';
-import 'package:ex1/data/models/service_model.dart';
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/exceptions.dart';
 import '../../data/cache_manager.dart';
-import '../../data/repositories/image_repository.dart';
 import '../state/service_state.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'internet_connectivity_bloc.dart';
 
 
-
-
-
+class AppConfig {
+  static const String servicesTable = 'services';
+  static const String columnName = 'name';
+  static const String columnImageUrl = 'imageUrl';
+  static const String columnServiceType = 'servicetype';
+  static const int pageSize = 8;
+  static const String columnId='id' ;
+}
 
 
 
 class ServiceCubit extends Cubit<ServiceState> {
-  final ImageRepository imageRepository;
-  final InternetConnectivityBloc connectivityBloc;
   final CacheManager cacheManager;
+  final InternetConnectivityBloc connectivityBloc;
+  Set<int> loadedServiceIds = {}; // Track already loaded service IDs
+
+
   Timer? _debounceTimer;
+  Timer? _debounce;
+
   bool _isFetching = false;
 
+  int _currentPage = 0;
 
 
   ServiceCubit({
-    required this.imageRepository,
     required this.connectivityBloc,
     required this.cacheManager,
-
-  })
-      : super(ServiceState(services: [], imageUrlCache: {}, filteredServices: [],isSearchMode: false,
+  }) : super(ServiceState(
+    services: [],
+    filteredServices: [],
+    imageUrlCache: {},
+    searchIndex: {},
+    isSearchMode: false,
   )) {
     connectivityBloc.internetAvailabilityStream.listen((isAvailable) {
       if (isAvailable) {
-        _fetchDataWithRetries();
+        print("fetching");
+        fetchData();
       } else {
         _loadCachedData();
       }
@@ -42,38 +55,235 @@ class ServiceCubit extends Cubit<ServiceState> {
   }
 
 
+  int get currentPage => _currentPage;
 
 
+  DateTime? get lastUpdated => state.lastUpdated;
 
-  /// Fetches data with retries using exponential backoff.
-  Future<void> _fetchDataWithRetries() async {
-    if (_isFetching) return;
+  /// Fetch services with pagination and partial fallback
+
+  Future<void> fetchData({int page = 0}) async {
+    if (state.hasReachedMax || _isFetching) return; // Prevent overlapping fetch calls
+
     _isFetching = true;
+    emit(state.copyWith(isLoading: true));
 
-    emit(state.copyWith(isLoading: true, isRetrying: true,errorMessage: 'Retrying to fetch data...'));
+    cacheManager.clearCache();
+
     try {
-      await connectivityBloc.retryWithBackoff(_fetchData);
+      List<Map<String, dynamic>> combinedServices = state.services;
+      // Load cached data for the first page
+      if (page == 0 && cacheManager.getCachedServices() != null) {
+        combinedServices = cacheManager.getCachedServices()!;
+        loadedServiceIds.addAll(combinedServices.map((service) => service['id'] as int? ?? -1));
+      }
+
+      // Fetch new services from Supabase
+      final newServices = await _fetchPaginatedServices(page);
+
+
+      if (newServices.isEmpty) {
+        emit(state.copyWith(hasReachedMax: true, isLoading: false));
+        return;
+      }
+
+      // Deduplicate services by 'id'
+      final uniqueNewServices = newServices.where((service) {
+
+        final id = service['id'] as int? ?? -1;
+
+        if (id == -1) {
+          print('Null ID encountered for service: $service');
+          return false;
+        }
+
+        if (loadedServiceIds.contains(id)) {
+          return false;
+        } else {
+          loadedServiceIds.add(id);
+          return true;
+        }
+      }).toList();
+
+      combinedServices.addAll(uniqueNewServices);
+      await _saveServicesWithHash(combinedServices);
+
+      emit(state.copyWith(
+        services: combinedServices,
+        filteredServices: combinedServices,
+        lastUpdated: DateTime.now(),
+        isLoading: false,
+      ));
+      _currentPage = page;
     } catch (e) {
       emit(state.copyWith(
         isLoading: false,
-        isRetrying: false,
-        errorMessage: _categorizeError(e as Exception),
+        errorMessage: _categorizeError(e),
       ));
     } finally {
       _isFetching = false;
     }
   }
 
-  Future<void> _loadCachedData() async {
 
-    try {
-      if (cacheManager.isCacheExpired()) {
-        emit(state.copyWith(
-            isLoading: false, errorMessage: 'Cache expired. Please refresh.'));
+  /// Save services with hash validation
+  Future<void> _saveServicesWithHash(List<Map<String, dynamic>> services) async {
+    final hash = _computeHash(services);
+    final cachedHash = cacheManager.getHash();
+
+    if (cachedHash != hash) {
+      await cacheManager.saveServices(services);
+      await cacheManager.saveHash(hash);
+      print('Cache updated with hash: $hash');
+    } else {
+      print('No changes detected. Cache remains the same.');
+    }
+  }
+
+
+  /// Search services with debouncing
+  void searchServices(String query) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
+      if (query.isEmpty) {
+        emit(state.copyWith(filteredServices: state.services));
         return;
       }
 
-      final cachedServices = await cacheManager.getCachedServices();
+      emit(state.copyWith(isLoading: true));
+      try {
+        final isOnline = await isConnected(); // Check connectivity
+
+        if (isOnline) {
+          final results = await Supabase.instance.client
+              .from(AppConfig.servicesTable)
+              .select('${AppConfig.columnName},${AppConfig.columnId}, ${AppConfig.columnImageUrl}, ${AppConfig.columnServiceType}')
+              .ilike(AppConfig.columnName, '%$query%');
+
+          emit(state.copyWith(
+            filteredServices: (results as List<dynamic>).map((item) => item as Map<String, dynamic>).toList(),
+            isLoading: false,
+          ));
+        } else {
+          final cachedServices = cacheManager.getCachedServices() ?? [];
+          final filteredServices = cachedServices.where((service) {
+            return (service[AppConfig.columnName] as String).toLowerCase().contains(query.toLowerCase());
+          }).toList();
+
+          emit(state.copyWith(
+            filteredServices: filteredServices,
+            isLoading: false,
+          ));
+        }
+      } catch (e) {
+        emit(state.copyWith(
+          isLoading: false,
+          errorMessage: 'Search failed: ${e.toString()}',
+        ));
+      }
+    });
+  }
+
+  /// Add or update a specific service in the cache
+  Future<void> addOrUpdateService(Map<String, dynamic> service) async {
+    try {
+      final cachedServices = cacheManager.getCachedServices() ?? [];
+      final updatedServices = cachedServices.map((item) {
+        if (item['id'] == service['id']) return service; // Replace if ID matches
+        return item;
+      }).toList();
+
+      if (!updatedServices.any((item) => item['id'] == service['id'])) {
+        updatedServices.add(service); // Add if not already in the cache
+      }
+
+      await _saveServicesWithHash(updatedServices);
+    } catch (e) {
+      throw Exception('Failed to add or update service: $e');
+    }
+  }
+
+
+  /// Compute hash for a list of services
+  String _computeHash(List<Map<String, dynamic>> services) {
+    final jsonString = jsonEncode(services);
+    return jsonString.hashCode.toString();
+  }
+
+
+  /// Refresh data from the beginning
+  Future<void> refreshData() async {
+    emit(state.copyWith(hasReachedMax: false, services: []));
+    await fetchData(page: 0);
+  }
+
+  /// Retry fetch with exponential backoff
+  Future<List<Map<String, dynamic>>> _retryFetch(
+      int retries, {
+        required Future<List<Map<String, dynamic>>> Function() fetchFunction,
+      }) async {
+    int delayMs = 200;
+    for (int i = 0; i < retries; i++) {
+      try {
+        _logRetry(i + 1);
+        return await fetchFunction();
+      } catch (e) {
+        if (i == retries - 1) rethrow;
+        await Future.delayed(Duration(milliseconds: delayMs));
+        delayMs *= 2;
+      }
+    }
+    return [];
+  }
+
+  /// Fetch services from Supabase with pagination and slow network feedback
+  Future<List<Map<String, dynamic>>> _fetchPaginatedServices(int page) async {
+    final slowNetworkTimer = Timer(const Duration(seconds: 5), () {
+      emit(state.copyWith(errorMessage: 'This is taking longer than expected...'));
+    });
+
+    try {
+      return _retryFetch(3, fetchFunction: () async {
+        final response = await Supabase.instance.client
+            .from(AppConfig.servicesTable)
+            .select('${AppConfig.columnName},${AppConfig.columnId}, ${AppConfig.columnImageUrl}, ${AppConfig.columnServiceType}')
+            .range(page * AppConfig.pageSize, ((page + 1) * AppConfig.pageSize) - 1);
+
+        return (response as List<dynamic>).map((item) => item as Map<String, dynamic>).toList();
+      });
+    } finally {
+      slowNetworkTimer.cancel();
+    }
+  }
+
+
+  Future<bool> isConnected() async {
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult.isEmpty ||
+        connectivityResult[0] == ConnectivityResult.none) {
+      return false;
+    }
+    return true;
+  }
+
+
+
+
+
+  /// Logging: Cache usage
+  void _logCacheUsage(int count) {
+    print('Cache hit: Loaded $count services from cache.');
+  }
+
+  /// Logging: Retry attempts
+  void _logRetry(int attempt) {
+    print('Retry attempt: $attempt');
+  }
+
+  /// Fallback to cached data when offline
+  Future<void> _loadCachedData() async {
+    try {
+      final cachedServices = cacheManager.getCachedServices();
       if (cachedServices != null) {
         emit(state.copyWith(
           services: cachedServices,
@@ -82,151 +292,44 @@ class ServiceCubit extends Cubit<ServiceState> {
         ));
       } else {
         emit(state.copyWith(
-            isLoading: false, errorMessage: 'No cached data available.'));
-        return;
-
+          isLoading: false,
+          errorMessage: 'No cached data available. Please connect to the internet.',
+        ));
       }
-    }
-    catch (e) {
-      emit(state.copyWith(isLoading: false, errorMessage: _categorizeError(e as Exception)));
-    }
-  }
-
-
-  Future<void> _fetchData() async {
-
-    emit(state.copyWith(isLoading: true, errorMessage: null));
-
-
-    try {
-
-      // Define the list of services
-      final serviceMaps = [
-        ServiceModel(id:'1',name: 'Grocery Booking', imageKey: 'grocery.jpg'),
-        ServiceModel(id:'2',name: 'Hair Salon Booking', imageKey: 'salon.jpg'),
-        ServiceModel(id:'3',name: 'Room Rent Booking', imageKey: 'room_rent.jpg'),
-        ServiceModel(id:'4',name: 'Land Availability', imageKey: 'land.jpg'),
-        ServiceModel(id:'5',name: 'Cab Booking', imageKey: 'cab.jpg'),
-        ServiceModel(id:'6',name: 'Restaurant Booking', imageKey: 'restaurant.jpg'),
-        ServiceModel(id:'7',name: 'Chicken Booking', imageKey: 'chicken_mutton.jpg'),
-        ServiceModel(id:'8',name: 'Tent Booking', imageKey: 'restaurant.jpg'),
-        ServiceModel(id:'9',name: 'Cloud Booking', imageKey: 'restaurant.jpg'),
-
-      ];
-
-      // Convert to List<Map<String, dynamic>>
-      List<Map<String, dynamic>> services = ServiceModel.toMapList(serviceMaps);
-
-
-      // Fetch all images in parallel
-      final imageFetchTasks = services.map((service) async {
-        final imageKey = service['imageKey'] ?? 'unknown';
-
-        try {
-          // Check cache first
-          final cachedUrl = await cacheManager.getCachedImageUrl(imageKey);
-          if (cachedUrl != null) return {imageKey: cachedUrl};
-
-          // Fetch image URL
-          final url = await imageRepository.fetchImageUrl(imageKey);
-          final validUrl = url ?? 'https://via.placeholder.com/150?text=No+Image';
-
-          // Cache the fetched URL
-          await cacheManager.saveImageUrl(imageKey, validUrl);
-
-          return {imageKey: validUrl};
-        } catch (e) {
-          throw NetworkException('Failed to fetch image for $imageKey: ${e.toString()}');
-        }
-      });
-
-      // Wait for all tasks to complete
-      final fetchedImages = await Future.wait(imageFetchTasks);
-
-      // Build the image cache map
-       final imageUrlCache = <String, String>{
-        for (var imageMap in fetchedImages) ...imageMap,
-      };
-
-
-      await cacheManager.saveServices(services);
-
-      emit(state.copyWith(services: services, filteredServices: services, imageUrlCache: imageUrlCache, isLoading: false,isRetrying: false,
+    } catch (e) {
+      emit(state.copyWith(
+        isLoading: false,
+        errorMessage: 'Failed to load cached data: ${e.toString()}',
       ));
     }
-    catch (e) {
-
-      throw NetworkException('Failed to fetch services: ${e.toString()}');
-
-    }
-
   }
 
-
-
-
-  Future<void> refreshData() async {
-    await _fetchData();
-  }
-
-
-
-  void searchServices(String query) async{
-
-    _debounce(() async {
-
-      if (query.isEmpty) {
-        // Reset to show all services if the query is empty
-        emit(state.copyWith(filteredServices: state.services));
-      } else {
-        // Filter services based on the search query
-        final filtered = await compute(_filterServices, {'services': state.services, 'query': query});
-        emit(state.copyWith(filteredServices: filtered)); // Update filtered services.
-
-      }
-
-    });
-
-  }
-
-  static List<Map<String, dynamic>> _filterServices(Map<String, dynamic> params) {
-    final List<Map<String, dynamic>> services = params['services'];
-    final String query = params['query'];
-    return services
-        .where((service) =>
-        service['name'].toLowerCase().contains(query.toLowerCase()))
-        .toList();
-  }
-
-
-  void _debounce(Function callback, {Duration duration = const Duration(milliseconds: 300)}) {
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(duration, () => callback());
-  }
-
+  /// Toggle search mode
   void toggleSearchMode() {
     emit(state.copyWith(isSearchMode: !state.isSearchMode));
   }
 
-  String _categorizeError(Exception e) {
-    if (e is NetworkException) {
-      return e.message;
-    } else if (e is CacheException) {
-      return e.message;
+  /// Categorize and handle errors for user-friendly messages
+  String _categorizeError(Object error) {
+    if (error is NetworkException) {
+      return 'Please check your internet connection and try again.';
+    } else if (error is SupabaseException) {
+      return 'A server error occurred. Please try again later.';
+    } else if (error is TimeoutException) {
+      return 'The request timed out. Please try again later.';
+    } else if (error is FormatException) {
+      return 'Data format error. Please contact support.';
+    } else if (error is Exception) {
+      return 'An unexpected error occurred: ${error.toString()}';
     } else {
-      return 'An unexpected error occurred: ${e.toString()}';
+      // Handle non-Exception errors gracefully
+      return 'An unknown error occurred: ${error.toString()}';
     }
   }
-
-
-
   @override
   Future<void> close() {
-
     _debounceTimer?.cancel();
-
     connectivityBloc.dispose();
-
     return super.close();
   }
 }

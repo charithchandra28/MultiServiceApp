@@ -1,9 +1,10 @@
 import 'package:get_it/get_it.dart';
-import '../../data/repositories/image_repository.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/cache_manager.dart';
+import '../data/repositories/shop_repository.dart';
+import '../domain/blocs/shop_cubit.dart';
 import 'connectivity_handler.dart';
 import '../domain/blocs/internet_connectivity_bloc.dart';
 import '../domain/blocs/service_cubit.dart';
@@ -17,8 +18,6 @@ Future<void> setupDependencies() async {
   getIt.registerLazySingleton<CacheManager>(() => CacheManager(prefs));
 
 
-  // Register ImageRepository as a singleton
-  getIt.registerLazySingleton<ImageRepository>(() => ImageRepository('ServiceImages'));
 
   // Register ConnectivityHandler as a singleton
   getIt.registerLazySingleton<ConnectivityHandler>(() => ConnectivityHandler());
@@ -28,10 +27,20 @@ Future<void> setupDependencies() async {
         () => InternetConnectivityBloc(connectivityHandler: getIt<ConnectivityHandler>()),
   );
 
+  // Register ShopRepository
+  getIt.registerLazySingleton<ShopRepository>(
+        () => ShopRepository(),
+  );
+
+  // Register ShopCubit
+  getIt.registerFactory<ShopCubit>(
+        () => ShopCubit(repository: getIt<ShopRepository>()),
+  );
+
+
   // Register ServiceCubit as a factory
   getIt.registerFactory<ServiceCubit>(
         () => ServiceCubit(
-      imageRepository: getIt<ImageRepository>(),
       connectivityBloc: getIt<InternetConnectivityBloc>(),
           cacheManager: getIt<CacheManager>(),
         ),

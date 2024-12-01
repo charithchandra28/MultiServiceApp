@@ -16,6 +16,7 @@ class CacheException implements Exception {
   String toString() => 'CacheException: $message';
 }
 
+
 class UnknownException implements Exception {
   final String message;
 
@@ -23,4 +24,13 @@ class UnknownException implements Exception {
 
   @override
   String toString() => 'UnknownException: $message';
+}
+
+class SupabaseException implements Exception {
+  final String message;
+
+  SupabaseException(this.message);
+
+  @override
+  String toString() => 'SupabaseException: $message';
 }

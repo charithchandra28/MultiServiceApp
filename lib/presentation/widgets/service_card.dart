@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../data/repositories/shop_repository.dart';
+import '../../domain/blocs/shop_cubit.dart';
+import '../screens/shop_list_screen.dart';
 
 class ServiceCard extends StatelessWidget {
   final Map<String, dynamic> service;
@@ -30,7 +36,12 @@ class ServiceCard extends StatelessWidget {
           HapticFeedback.lightImpact();
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (context) => service['screen']),
+            MaterialPageRoute(builder: (context) => BlocProvider(
+              create: (_) => ShopCubit(
+                repository: ShopRepository(),
+              )..fetchShops(service['servicetype']), // Pass service name as servicetype
+              child: ShopListScreen(serviceName: service['name']),
+            ),),
           );
         },
         child: Card(
@@ -74,7 +85,7 @@ class ServiceCard extends StatelessWidget {
                 Padding(
                   padding:  EdgeInsets.symmetric(horizontal: paddingHorizontal),
                   child: Text(
-                    service['name'],
+                    service['name'] ?? 'Unknown Service',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: fontSize,
@@ -92,6 +103,7 @@ class ServiceCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                SizedBox(height: screenHeight * 0.01),
               ],
             ),
           ),

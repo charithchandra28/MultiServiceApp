@@ -1,75 +1,95 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/exceptions.dart';
-
 class CacheManager {
   final SharedPreferences prefs;
 
   CacheManager(this.prefs);
 
-  static const String servicesKey = 'cached_services';
-  static const String imageUrlPrefix = 'image_url_';
-  static const String cacheTimestampKey = 'cache_timestamp';
+  static const String _servicesKey = 'services';
+  static const String _timestampKey = 'cache_timestamp';
+  static const String _hashKey = 'cache_hash';
 
   /// Save services to cache
   Future<void> saveServices(List<Map<String, dynamic>> services) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      await prefs.setString(servicesKey, jsonEncode(services));
-      await prefs.setInt(cacheTimestampKey, timestamp);
+      final jsonData = jsonEncode(services);
+
+      await prefs.setString(_servicesKey, jsonData);
+      await prefs.setInt(_timestampKey, timestamp);
     } catch (e) {
-      throw CacheException('Failed to save services: ${e.toString()}');
+      throw Exception('Failed to save services to cache: $e');
     }
   }
 
   /// Get cached services
-  Future<List<Map<String, dynamic>>?> getCachedServices() async {
+  List<Map<String, dynamic>>? getCachedServices() {
     try {
-      final cachedServices = prefs.getString(servicesKey);
-      if (cachedServices != null) {
-        return List<Map<String, dynamic>>.from(jsonDecode(cachedServices));
+      final cachedData = prefs.getString(_servicesKey);
+      if (cachedData != null) {
+        return List<Map<String, dynamic>>.from(jsonDecode(cachedData));
       }
+      return null;
     } catch (e) {
-      throw CacheException('Failed to load cached services: ${e.toString()}');
-    }
-    return null;
-  }
-
-  /// Save image URL to cache
-  Future<void> saveImageUrl(String key, String url) async {
-    try {
-      await prefs.setString('$imageUrlPrefix$key', url);
-    } catch (e) {
-      throw CacheException('Failed to save image URL for $key: ${e.toString()}');
+      throw Exception('Failed to retrieve cached services: $e');
     }
   }
 
-  /// Get cached image URL
-  Future<String?> getCachedImageUrl(String key) async {
+  /// Save cache hash
+  Future<void> saveHash(String hash) async {
     try {
-      return prefs.getString('$imageUrlPrefix$key');
+      await prefs.setString(_hashKey, hash);
     } catch (e) {
-      throw CacheException('Failed to retrieve cached image URL for $key: ${e.toString()}');
+      throw Exception('Failed to save cache hash: $e');
     }
   }
 
-  /// Check if cache is expired (e.g., older than 1 day)
-  bool isCacheExpired() {
+  /// Get cache hash
+  String? getHash() {
     try {
-      final timestamp = prefs.getInt(cacheTimestampKey);
-      if (timestamp == null) return true;
-      final expiryDuration = const Duration(days: 1);
-      final cacheAge = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(timestamp));
+      return prefs.getString(_hashKey);
+    } catch (e) {
+      throw Exception('Failed to retrieve cache hash: $e');
+    }
+  }
+
+  /// Check if the cache is expired
+  bool isCacheExpired({Duration expiryDuration = const Duration(days: 1)}) {
+    try {
+      final cacheTimestamp = prefs.getInt(_timestampKey);
+      if (cacheTimestamp == null) return true;
+
+      final cacheAge = DateTime.now().difference(
+        DateTime.fromMillisecondsSinceEpoch(cacheTimestamp),
+      );
       return cacheAge > expiryDuration;
     } catch (e) {
-      throw CacheException('Failed to check cache expiration: ${e.toString()}');
+      throw Exception('Failed to check cache expiration: $e');
     }
   }
 
-  /// Clear cache
+  /// Clear the cache
   Future<void> clearCache() async {
-    await prefs.remove(servicesKey);
-    await prefs.remove(cacheTimestampKey);
+    try {
+      await prefs.remove(_servicesKey);
+      await prefs.remove(_timestampKey);
+      await prefs.remove(_hashKey);
+    } catch (e) {
+      throw Exception('Failed to clear cache: $e');
+    }
+  }
+
+  /// Get the last cache update timestamp
+  DateTime? getLastCacheTimestamp() {
+    try {
+      final timestamp = prefs.getInt(_timestampKey);
+      if (timestamp != null) {
+        return DateTime.fromMillisecondsSinceEpoch(timestamp);
+      }
+      return null;
+    } catch (e) {
+      throw Exception('Failed to retrieve cache timestamp: $e');
+    }
   }
 }

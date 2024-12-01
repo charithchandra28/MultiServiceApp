@@ -58,22 +58,6 @@ class InternetConnectivityBloc   {
 
 
 
-  /// Retry logic for transient failures.
-  Future<T> retryWithBackoff<T>(Future<T> Function() action) async {
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-
-        return await action();
-
-      } catch (e) {
-        if (attempt == maxRetries) {
-          rethrow;
-        }
-        await Future.delayed(retryBaseDelay * (1 << (attempt - 1))); // Exponential backoff
-      }
-    }
-    throw Exception('Max retries reached');
-  }
 
   /// Dispose resources.
   void dispose() {

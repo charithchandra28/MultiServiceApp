@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../core/di.dart';
 import '../../domain/blocs/service_cubit.dart';
 import '../../domain/state/service_state.dart';
 import '../widgets/service_card.dart';
@@ -17,13 +16,16 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
 
+  final ScrollController _scrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   Timer? _debounce;
 
 
-
-
+  @override
+  void initState() {
+    super.initState();
+  }
 
 
 
@@ -39,6 +41,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<ServiceCubit, ServiceState>(
+        buildWhen: (previous, current) =>
+        previous.services != current.services ||
+            previous.isLoading != current.isLoading ||
+            previous.hasReachedMax != current.hasReachedMax,
         builder: (context, state) {
           return Scaffold(
             appBar: _buildAppBar(state),
@@ -144,6 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
       maxCrossAxisExtent = screenWidth * 0.25;
     }
 
+
     if (state.isLoading) {
         return const Center(child: CircularProgressIndicator());
       }
@@ -155,29 +162,29 @@ class _HomeScreenState extends State<HomeScreen> {
       if (state.services.isEmpty | state.filteredServices.isEmpty) {
         return const Center(child: Text('No services available.'));
       }
-
-      final servicesWithScreens;
-
-      if(state.isSearchMode){
-        servicesWithScreens = attachScreens(state.filteredServices);
-
-      }else{
-        servicesWithScreens = attachScreens(state.services);
-      }
+    final servicesWithScreens = attachScreens(
+      state.isSearchMode ? state.filteredServices : state.services,
+    );
 
       return SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            return
-              SingleChildScrollView(
-                child: RefreshIndicator(
-                  onRefresh: () async {
-                    // Call the initialize() method in ServiceCubit to reload data
-                    await context.read<ServiceCubit>().refreshData();
-                    ();
-                  },
+            return  NotificationListener<ScrollNotification>(
+                onNotification: (scrollInfo) {
+              if (scrollInfo.metrics.pixels == scrollInfo.metrics.maxScrollExtent &&
+                  !state.isLoading &&
+                  !state.hasReachedMax) {
+                context.read<ServiceCubit>().fetchServices();
+                return true;
+              }
+              return false;
+            },
 
-                  child: GridView.builder(
+            child: GridView.builder(
+
+                    controller: _scrollController,
+
+                    physics: const BouncingScrollPhysics(), // Ensure scroll physics are enabled
 
                     padding: EdgeInsets.symmetric(vertical: paddingVertical, horizontal: paddingHorizontal),
 
@@ -188,13 +195,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       childAspectRatio: 1.0,
                     ),
 
-                    itemCount: servicesWithScreens.length,
+                    itemCount:  servicesWithScreens.length + (state.hasReachedMax ? 0 : 1),
 
                     shrinkWrap: true,
 
-                    physics: const NeverScrollableScrollPhysics(),
-
                     itemBuilder: (context, index) {
+
+                     if (index == servicesWithScreens.length) {
+                       return const Center(
+                         child: Padding(
+                         padding: EdgeInsets.all(8.0),
+                         child: CircularProgressIndicator(),
+                          ),
+                       );
+                      }
 
                       final service = servicesWithScreens[index];
 
@@ -202,15 +216,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         tag: service['name'],
                         child: ServiceCard(
                           service: service,
-                          imageUrl: state.imageUrlCache[service['imageKey']],
+                          imageUrl: service['imageUrl'],
                           fontSize: fontSize,
                           theme: theme,
                         ),
                       );
                     },
-                  ),
-                ),
-              );
+                  );
           },
         ),
       );
@@ -245,6 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _searchController.dispose();
     _focusNode.dispose();
     _debounce?.cancel();
