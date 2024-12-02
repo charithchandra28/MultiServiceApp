@@ -1,3 +1,4 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
@@ -66,18 +67,9 @@ class ServiceCard extends StatelessWidget {
                   flex: 3,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(15),
-                    child: CachedNetworkImage(
-                      width: double.infinity,
-                      height: double.infinity,
+                    child:_RetryableCachedImage(
                       imageUrl: imageUrl ?? '',
-                      placeholder: (context, url) => const CircularProgressIndicator(),
-                      errorWidget: (context, url, error) => const Icon(Icons.broken_image, size: 50),
-                      fit: BoxFit.cover,
-                      imageBuilder: (context, imageProvider) => Semantics(
-                        label: 'Image of ${service['name']}',
-                        child: Image(image: imageProvider, fit: BoxFit.cover),
-                      ),
-                      fadeInDuration: const Duration(milliseconds: 200),
+                      serviceName: service['name'] ?? 'Unknown Service',
                     ),
                   ),
                 ),
@@ -109,6 +101,70 @@ class ServiceCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+class _RetryableCachedImage extends StatefulWidget {
+  final String imageUrl;
+  final String serviceName;
+
+  const _RetryableCachedImage({
+    Key? key,
+    required this.imageUrl,
+    required this.serviceName,
+  }) : super(key: key);
+
+  @override
+  State<_RetryableCachedImage> createState() => _RetryableCachedImageState();
+}
+
+class _RetryableCachedImageState extends State<_RetryableCachedImage> {
+  bool _isRetrying = false;
+
+  Future<void> _retryImage() async {
+    setState(() {
+      _isRetrying = true;
+    });
+
+    final connectivityResult = await Connectivity().checkConnectivity();
+
+    if (connectivityResult != ConnectivityResult.none) {
+      // Clear cached image and retry loading
+      await CachedNetworkImage.evictFromCache(widget.imageUrl);
+      setState(() {
+        _isRetrying = false;
+      });
+    } else {
+      setState(() {
+        _isRetrying = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No internet connection. Retry failed.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _isRetrying
+        ? const Center(child: CircularProgressIndicator())
+        : CachedNetworkImage(
+      imageUrl: widget.imageUrl,
+      placeholder: (context, url) => const Center(child: CircularProgressIndicator()),
+      errorWidget: (context, url, error) => GestureDetector(
+        onTap: _retryImage,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.broken_image, size: 50),
+            const SizedBox(height: 10),
+            const Text('Tap to Retry', style: TextStyle(color: Colors.red)),
+          ],
+        ),
+      ),
+      fit: BoxFit.cover,
+      fadeInDuration: const Duration(milliseconds: 200),
     );
   }
 }

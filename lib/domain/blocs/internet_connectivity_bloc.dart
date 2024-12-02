@@ -57,8 +57,6 @@ class InternetConnectivityBloc   {
 
 
 
-
-
   /// Dispose resources.
   void dispose() {
     _connectivitySubscription.cancel();

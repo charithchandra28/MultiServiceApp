@@ -20,11 +20,25 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   Timer? _debounce;
+  Timer? _debounceTimer;
+
+
 
 
   @override
   void initState() {
     super.initState();
+    print("First called");
+
+    final serviceCubit = context.read<ServiceCubit>();
+
+    // Load cached data initially
+    serviceCubit.loadCachedData();
+
+    // If online, fetch services from the server
+    if (serviceCubit.state.isOnline) {
+      serviceCubit.fetchServices();
+    }
   }
 
 
@@ -42,19 +56,41 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return BlocBuilder<ServiceCubit, ServiceState>(
         buildWhen: (previous, current) =>
-        previous.services != current.services ||
+        previous.isOnline != current.isOnline ||
+            previous.services != current.services ||
             previous.isLoading != current.isLoading ||
             previous.hasReachedMax != current.hasReachedMax,
-        builder: (context, state) {
-          return Scaffold(
-            appBar: _buildAppBar(state),
-            body: _buildBody(state),
-          );
-        }
+      builder: (context, state) {
+        return Scaffold(
+          appBar: _buildAppBar(state),
+          body: SafeArea(
+            child: Column(
+              children: [
+                if (!state.isOnline) _buildOfflineBanner(state),
+                Expanded(child: _buildBody(state)),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
 
+  Widget _buildOfflineBanner(ServiceState state) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      color: Colors.red,
+      padding: const EdgeInsets.all(8.0),
+      height: state.isOnline ? 0 : 50,
+      child: const Center(
+        child: Text(
+          'Offline mode: Data may be outdated.',
+          style: TextStyle(color: Colors.white),
+        ),
+      ),
+    );
+  }
 
 
 
@@ -101,7 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
       icon: Icon(state.isSearchMode ? Icons.cancel : Icons.search),
       tooltip: state.isSearchMode ? 'Close search' : 'Open search',
       onPressed: () {
-        BlocProvider.of<ServiceCubit>(context).toggleSearchMode();
+        context.read<ServiceCubit>().toggleSearchMode();
         if (state.isSearchMode) {
           _searchController.clear();
           BlocProvider.of<ServiceCubit>(context).searchServices('');
@@ -151,17 +187,24 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
 
-    if (state.isLoading) {
-        return const Center(child: CircularProgressIndicator());
-      }
+    if (state.services.isEmpty && state.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-      if (state.errorMessage != null) {
-        return Center(child: Text(state.errorMessage!, style: const TextStyle(color: Colors.red)));
-      }
+    if (state.errorMessage != null && state.services.isEmpty) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(state.errorMessage!),
+          ElevatedButton(
+            onPressed: () => context.read<ServiceCubit>().retry(),
+            child: const Text('Retry'),
+          ),
+        ],
+      );
+    }
 
-      if (state.services.isEmpty | state.filteredServices.isEmpty) {
-        return const Center(child: Text('No services available.'));
-      }
+
     final servicesWithScreens = attachScreens(
       state.isSearchMode ? state.filteredServices : state.services,
     );
@@ -169,12 +212,18 @@ class _HomeScreenState extends State<HomeScreen> {
       return SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            return  NotificationListener<ScrollNotification>(
+            return
+
+              RefreshIndicator(
+                onRefresh: () async {
+              await context.read<ServiceCubit>().refreshServices();
+            },
+            child:  NotificationListener<ScrollNotification>(
                 onNotification: (scrollInfo) {
               if (scrollInfo.metrics.pixels == scrollInfo.metrics.maxScrollExtent &&
                   !state.isLoading &&
-                  !state.hasReachedMax) {
-                context.read<ServiceCubit>().fetchServices();
+                  !state.hasReachedMax && state.isOnline) {
+                _onScrollEnd(context);
                 return true;
               }
               return false;
@@ -222,7 +271,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       );
                     },
-                  );
+                  )
+            )
+            );
           },
         ),
       );
@@ -253,6 +304,19 @@ class _HomeScreenState extends State<HomeScreen> {
           return service;
       }
     }).toList();
+  }
+
+  void _onScrollEnd(BuildContext context) {
+    // Cancel any existing debounce timer
+    _debounceTimer?.cancel();
+
+    // Set a new debounce timer
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      print("clicked me fuck");
+
+
+      context.read<ServiceCubit>().fetchServices();
+    });
   }
 
   @override

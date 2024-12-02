@@ -23,15 +23,17 @@ class AppConfig {
 class ServiceCubit extends Cubit<ServiceState> {
   final CacheManager cacheManager;
   final InternetConnectivityBloc connectivityBloc;
-  Set<int> loadedServiceIds = {}; // Track already loaded service IDs
+
+  bool _isFetching = false;
+  int _currentPage = 0;
+  static const int _pageSize = 10; // Number of items per page
+  final Set<int> _loadedServiceIds = {}; // Tracks IDs of already loaded services
 
 
   Timer? _debounceTimer;
   Timer? _debounce;
 
-  bool _isFetching = false;
 
-  int _currentPage = 0;
 
 
   ServiceCubit({
@@ -40,105 +42,127 @@ class ServiceCubit extends Cubit<ServiceState> {
   }) : super(ServiceState(
     services: [],
     filteredServices: [],
-    imageUrlCache: {},
-    searchIndex: {},
+    isOnline: true,
     isSearchMode: false,
   )) {
     connectivityBloc.internetAvailabilityStream.listen((isAvailable) {
+
+      emit(state.copyWith(isOnline:isAvailable));
+
       if (isAvailable) {
-        print("fetching");
-        fetchData();
+        print("did it got called 1");
+
+        if((state.services.isNotEmpty && !state.hasReachedMax) || (cacheManager.getCachedServices()==null) ){
+          print("did it got called 2");
+
+          fetchServices();
+        }
+
       } else {
-        _loadCachedData();
+        loadCachedData();
       }
     });
+
+  }
+
+  void loadCachedData() {
+      print("did it got called 3");
+      _loadCachedData();
+
   }
 
 
-  int get currentPage => _currentPage;
 
-
-  DateTime? get lastUpdated => state.lastUpdated;
 
   /// Fetch services with pagination and partial fallback
 
-  Future<void> fetchData({int page = 0}) async {
-    if (state.hasReachedMax || _isFetching) return; // Prevent overlapping fetch calls
+  Future<void> fetchServices({bool isRefresh = false}) async {
+
+    if (_isFetching || state.hasReachedMax) return;
 
     _isFetching = true;
-    emit(state.copyWith(isLoading: true));
 
-    cacheManager.clearCache();
+    print("fetch $isRefresh ");
+
+
+    if (isRefresh) {
+      emit(state.copyWith(isLoading: true, hasReachedMax: false, errorMessage: null));
+      _currentPage = 0;
+      _loadedServiceIds.clear(); // Reset the set when refreshing
+    } else {
+      emit(state.copyWith(isLoading: true, errorMessage: null));
+    }
 
     try {
-      List<Map<String, dynamic>> combinedServices = state.services;
-      // Load cached data for the first page
-      if (page == 0 && cacheManager.getCachedServices() != null) {
-        combinedServices = cacheManager.getCachedServices()!;
-        loadedServiceIds.addAll(combinedServices.map((service) => service['id'] as int? ?? -1));
-      }
 
-      // Fetch new services from Supabase
-      final newServices = await _fetchPaginatedServices(page);
+      final newServices = await _fetchPaginatedData();
 
-
-      if (newServices.isEmpty) {
-        emit(state.copyWith(hasReachedMax: true, isLoading: false));
-        return;
-      }
-
-      // Deduplicate services by 'id'
-      final uniqueNewServices = newServices.where((service) {
-
+      // Deduplicate services by checking `_loadedServiceIds`
+      final uniqueServices = newServices.where((service) {
         final id = service['id'] as int? ?? -1;
-
-        if (id == -1) {
-          print('Null ID encountered for service: $service');
-          return false;
-        }
-
-        if (loadedServiceIds.contains(id)) {
-          return false;
+        if (id == -1 || _loadedServiceIds.contains(id)) {
+          return false; // Exclude duplicates or invalid IDs
         } else {
-          loadedServiceIds.add(id);
+          _loadedServiceIds.add(id); // Mark ID as loaded
           return true;
         }
       }).toList();
 
-      combinedServices.addAll(uniqueNewServices);
-      await _saveServicesWithHash(combinedServices);
+      print("$newServices");
+      print("$uniqueServices");
+      // Skip emitting state if no new unique services
+      if (uniqueServices.isEmpty) {
+        emit(state.copyWith(isLoading: false, hasReachedMax: true));
+        return;
+      }
 
-      emit(state.copyWith(
-        services: combinedServices,
-        filteredServices: combinedServices,
-        lastUpdated: DateTime.now(),
-        isLoading: false,
-      ));
-      _currentPage = page;
+
+
+      final updatedServices = isRefresh ? uniqueServices : [...state.services, ...uniqueServices];
+
+      // Save updated services to cache
+      if (isRefresh || _currentPage == 0) {
+          await cacheManager.saveServices(updatedServices);
+
+      } // Save to cache
+        emit(state.copyWith(
+          services: updatedServices,
+          filteredServices: updatedServices,
+          hasReachedMax: uniqueServices.length < _pageSize,
+          isLoading: false,
+        ));
+        _currentPage++;
     } catch (e) {
-      emit(state.copyWith(
-        isLoading: false,
-        errorMessage: _categorizeError(e),
-      ));
+      emit(state.copyWith(isLoading: false, errorMessage: _categorizeError(e)));
     } finally {
       _isFetching = false;
     }
   }
 
 
-  /// Save services with hash validation
-  Future<void> _saveServicesWithHash(List<Map<String, dynamic>> services) async {
-    final hash = _computeHash(services);
-    final cachedHash = cacheManager.getHash();
+  /// Fetch paginated data with retry logic
+  Future<List<Map<String, dynamic>>> _fetchPaginatedData({int retries = 3}) async {
+    final start = _currentPage * _pageSize;
+    final end = start + _pageSize - 1;
 
-    if (cachedHash != hash) {
-      await cacheManager.saveServices(services);
-      await cacheManager.saveHash(hash);
-      print('Cache updated with hash: $hash');
-    } else {
-      print('No changes detected. Cache remains the same.');
+    for (int attempt = 0; attempt < retries; attempt++) {
+      try {
+        final response = await Supabase.instance.client
+            .from('services')
+            .select('*')
+            .range(start, end);
+
+        return List<Map<String, dynamic>>.from(response);
+      } catch (e) {
+        if (attempt == retries - 1) rethrow; // Rethrow after final attempt
+        await Future.delayed(Duration(milliseconds: 500 * (attempt + 1))); // Exponential backoff
+      }
     }
+    return [];
   }
+
+
+
 
 
   /// Search services with debouncing
@@ -184,77 +208,19 @@ class ServiceCubit extends Cubit<ServiceState> {
     });
   }
 
-  /// Add or update a specific service in the cache
-  Future<void> addOrUpdateService(Map<String, dynamic> service) async {
-    try {
-      final cachedServices = cacheManager.getCachedServices() ?? [];
-      final updatedServices = cachedServices.map((item) {
-        if (item['id'] == service['id']) return service; // Replace if ID matches
-        return item;
-      }).toList();
-
-      if (!updatedServices.any((item) => item['id'] == service['id'])) {
-        updatedServices.add(service); // Add if not already in the cache
-      }
-
-      await _saveServicesWithHash(updatedServices);
-    } catch (e) {
-      throw Exception('Failed to add or update service: $e');
-    }
-  }
 
 
-  /// Compute hash for a list of services
-  String _computeHash(List<Map<String, dynamic>> services) {
-    final jsonString = jsonEncode(services);
-    return jsonString.hashCode.toString();
-  }
 
 
   /// Refresh data from the beginning
   Future<void> refreshData() async {
+    print("fghfgh");
     emit(state.copyWith(hasReachedMax: false, services: []));
-    await fetchData(page: 0);
+    // await fetchData(page: 0);
   }
 
-  /// Retry fetch with exponential backoff
-  Future<List<Map<String, dynamic>>> _retryFetch(
-      int retries, {
-        required Future<List<Map<String, dynamic>>> Function() fetchFunction,
-      }) async {
-    int delayMs = 200;
-    for (int i = 0; i < retries; i++) {
-      try {
-        _logRetry(i + 1);
-        return await fetchFunction();
-      } catch (e) {
-        if (i == retries - 1) rethrow;
-        await Future.delayed(Duration(milliseconds: delayMs));
-        delayMs *= 2;
-      }
-    }
-    return [];
-  }
 
-  /// Fetch services from Supabase with pagination and slow network feedback
-  Future<List<Map<String, dynamic>>> _fetchPaginatedServices(int page) async {
-    final slowNetworkTimer = Timer(const Duration(seconds: 5), () {
-      emit(state.copyWith(errorMessage: 'This is taking longer than expected...'));
-    });
 
-    try {
-      return _retryFetch(3, fetchFunction: () async {
-        final response = await Supabase.instance.client
-            .from(AppConfig.servicesTable)
-            .select('${AppConfig.columnName},${AppConfig.columnId}, ${AppConfig.columnImageUrl}, ${AppConfig.columnServiceType}')
-            .range(page * AppConfig.pageSize, ((page + 1) * AppConfig.pageSize) - 1);
-
-        return (response as List<dynamic>).map((item) => item as Map<String, dynamic>).toList();
-      });
-    } finally {
-      slowNetworkTimer.cancel();
-    }
-  }
 
 
   Future<bool> isConnected() async {
@@ -269,34 +235,70 @@ class ServiceCubit extends Cubit<ServiceState> {
 
 
 
-
-  /// Logging: Cache usage
-  void _logCacheUsage(int count) {
-    print('Cache hit: Loaded $count services from cache.');
-  }
-
   /// Logging: Retry attempts
   void _logRetry(int attempt) {
     print('Retry attempt: $attempt');
   }
-
-  /// Fallback to cached data when offline
+  /// Load cached data for offline use
   Future<void> _loadCachedData() async {
     try {
-      final cachedServices = cacheManager.getCachedServices();
-      if (cachedServices != null) {
-        emit(state.copyWith(
-          services: cachedServices,
-          filteredServices: cachedServices,
-          isLoading: false,
-        ));
-      } else {
+
+      print("does it came here");
+      // Check if the cache is expired or does not exist
+      if (cacheManager.isCacheExpired()) {
         emit(state.copyWith(
           isLoading: false,
           errorMessage: 'No cached data available. Please connect to the internet.',
         ));
+        return;
       }
+      // Fetch cached services from CacheManager
+      final cachedServices = cacheManager.getCachedServices();
+
+      print(cachedServices);
+
+      // Exit if no cached services are available
+      if (cachedServices == null || cachedServices.isEmpty) {
+        // No cached data available
+        print("it is entering here");
+        emit(state.copyWith(
+          isLoading: false,
+          errorMessage: 'No cached data available. Please connect to the internet.',
+        ));
+        return;
+      }
+
+      // Check if cached services are already present in the state
+      final currentServiceIds = state.services.map((service) => service['id']).toSet();
+
+      final newCachedServices = cachedServices.where((service) {
+        final id = service['id'];
+        return id != null && !currentServiceIds.contains(id);
+      }).toList();
+
+      _loadedServiceIds.addAll(cachedServices.map((service) => service['id']).whereType<int>());
+
+      // Set the current page to the cached page
+      _currentPage = 1;
+
+
+      // If no new cached services to add, skip emitting state
+      if (newCachedServices.isEmpty) {
+        return;
+      }
+
+      print(state.services);
+      print(newCachedServices);
+
+      // Emit updated state with deduplicated cached services
+      emit(state.copyWith(
+        services: [...state.services, ...newCachedServices],
+        filteredServices: [...state.services, ...newCachedServices],
+        isLoading: false,
+        hasReachedMax: newCachedServices.length < _pageSize,
+      ));
     } catch (e) {
+      print("does error coming here");
       emit(state.copyWith(
         isLoading: false,
         errorMessage: 'Failed to load cached data: ${e.toString()}',
@@ -307,6 +309,11 @@ class ServiceCubit extends Cubit<ServiceState> {
   /// Toggle search mode
   void toggleSearchMode() {
     emit(state.copyWith(isSearchMode: !state.isSearchMode));
+  }
+
+  /// Refresh services (pull-to-refresh functionality)
+  Future<void> refreshServices() async {
+    await fetchServices(isRefresh: true);
   }
 
   /// Categorize and handle errors for user-friendly messages
@@ -326,6 +333,17 @@ class ServiceCubit extends Cubit<ServiceState> {
       return 'An unknown error occurred: ${error.toString()}';
     }
   }
+
+
+  /// Retry fetching services
+  Future<void> retry() async {
+    if (state.isOnline) {
+      fetchServices();
+    } else {
+      _loadCachedData();
+    }
+  }
+
   @override
   Future<void> close() {
     _debounceTimer?.cancel();
